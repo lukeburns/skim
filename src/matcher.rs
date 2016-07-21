@@ -30,6 +30,9 @@ enum Algorithm {
     REGEX,
 }
 
+const ALGORITHMS: [Algorithm; 2] = [Algorithm::FUZZY, Algorithm::REGEX];
+const ALGORITHM_NAMES: [&'static str; 2] = ["", "regex"];
+
 pub struct Matcher {
     pub eb_req: Arc<EventBox<Event>>,       // event box that recieve requests
     eb_notify: Arc<EventBox<Event>>,    // event box that send out notification
@@ -40,7 +43,7 @@ pub struct Matcher {
     partitions: usize,
     rank_criterion: Arc<Vec<RankCriteria>>,
     is_interactive: bool,
-    algorithm: Algorithm,
+    algorithm_index: usize,
 }
 
 impl<'a> Matcher {
@@ -64,7 +67,7 @@ impl<'a> Matcher {
                                           RankCriteria::Begin,
                                           RankCriteria::End]),
             is_interactive: false,
-            algorithm: Algorithm::FUZZY,
+            algorithm_index: 0,
         }
     }
 
@@ -84,7 +87,7 @@ impl<'a> Matcher {
         }
 
         if options.opt_present("regex") {
-            self.algorithm = Algorithm::REGEX;
+            self.algorithm_index = 1;
         }
 
         if let Some(query) = options.opt_str("q") {
@@ -109,7 +112,7 @@ impl<'a> Matcher {
             let tx = tx.clone();
             let eb_req = self.eb_req.clone();
             let criterion = self.rank_criterion.clone();
-            let algorithm = self.algorithm;
+            let algorithm = ALGORITHMS[self.algorithm_index];
 
             let guard = thread::spawn(move || {
                 let items = items.read().unwrap();
@@ -235,6 +238,10 @@ impl<'a> Matcher {
                             self.eb_notify.set(Event::EvMatcherSync, Box::new(true));
                             let _ = self.eb_req.wait_for(Event::EvModelAck);
                         }
+                    }
+                    Event::EvMatcherRotateAlgorithm => {
+                        self.algorithm_index = (self.algorithm_index + 1) % ALGORITHMS.len();
+                        self.eb_notify.set(Event::EvModelUpdateAlgorithm, Box::new(ALGORITHM_NAMES[self.algorithm_index].to_string()));
                     }
                     _ => {}
                 }

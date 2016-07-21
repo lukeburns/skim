@@ -221,6 +221,11 @@ fn real_main() -> i32 {
                     // ignore for now
                 }
 
+                Event::EvModelUpdateAlgorithm => {
+                    let algorithm: String = *val.downcast().unwrap();
+                    model.update_algorithm(algorithm);
+                }
+
                 Event::EvResize => {
                     model.resize();
                     model.display();
@@ -344,6 +349,14 @@ fn real_main() -> i32 {
                 }
 
                 Event::EvActPreviousHistory => {}
+
+                Event::EvActRotateMode => {
+                    if !model.is_interactive {
+                        let query = model.query.get_query();
+                        eb_matcher.set(Event::EvMatcherRotateAlgorithm, Box::new(true));
+                        eb.set(Event::EvReaderResetQuery, Box::new(query));
+                    }
+                }
 
                 Event::EvActScrollLeft => {
                     model.act_vertical_scroll(-1);

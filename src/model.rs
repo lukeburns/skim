@@ -46,6 +46,7 @@ pub struct Model {
     pub matched_items: Arc<RwLock<OrderedVec<MatchedItem>>>,
     num_total: usize,
     percentage: u64,
+    algorithm: String,
 
     pub multi_selection: bool,
     pub prompt: String,
@@ -83,6 +84,7 @@ impl Model {
             matched_items: Arc::new(RwLock::new(OrderedVec::new())),
             num_total: 0,
             percentage: 100,
+            algorithm: String::new(),
             multi_selection: false,
             prompt: "> ".to_string(),
             reading: false,
@@ -145,6 +147,10 @@ impl Model {
         self.percentage = percentage;
     }
 
+    pub fn update_algorithm(&mut self, algorithm: String) {
+        self.algorithm = algorithm;
+    }
+
     pub fn update_matched_items(&mut self, items: Arc<RwLock<OrderedVec<MatchedItem>>>) {
         self.matched_items = items;
 
@@ -183,6 +189,10 @@ impl Model {
         let num_matched = self.matched_items.read().unwrap().len();
 
         self.curses.cprint(format!(" {}/{}", num_matched, self.num_total).as_ref(), COLOR_INFO, false);
+
+        if self.algorithm != "" {
+            self.curses.cprint(format!("/({})", self.algorithm).as_ref(), COLOR_INFO, false);
+        }
 
         if self.multi_selection && self.selected_indics.len() > 0 {
             self.curses.cprint(format!(" [{}]", self.selected_indics.len()).as_ref(), COLOR_INFO, true);
