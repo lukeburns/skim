@@ -24,7 +24,7 @@ const PROCESS_START_UPDATE_DURATION: u32 = 200; // milliseconds
 const PROCESS_UPDATE_DURATION: u64 = 100; // milliseconds
 const RESULT_UPDATE_DURATION: u64 = 300; // milliseconds
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Algorithm {
     FUZZY,
     REGEX,
@@ -39,7 +39,7 @@ pub struct Matcher {
     items: Arc<RwLock<Vec<Item>>>,
     new_items: Arc<RwLock<Vec<Item>>>,
     query: Query,
-    cache: HashMap<String, MatcherCache>,
+    cache: HashMap<(String, Algorithm), MatcherCache>,
     partitions: usize,
     rank_criterion: Arc<Vec<RankCriteria>>,
     is_interactive: bool,
@@ -52,7 +52,7 @@ impl<'a> Matcher {
                eb_notify: Arc<EventBox<Event>>) -> Self {
 
         let mut cache = HashMap::new();
-        cache.entry("".to_string()).or_insert(MatcherCache::new());
+        cache.entry(("".to_string(), Algorithm::FUZZY)).or_insert(MatcherCache::new());
 
         Matcher {
             eb_req: Arc::new(EventBox::new()),
@@ -91,13 +91,15 @@ impl<'a> Matcher {
         }
 
         if let Some(query) = options.opt_str("q") {
+            let algorithm = ALGORITHMS[self.algorithm_index];
             self.query = Query::new(&query);
-            self.cache.entry(query.to_string()).or_insert(MatcherCache::new());
+            self.cache.entry((query.to_string(), algorithm)).or_insert(MatcherCache::new());
         }
     }
 
     pub fn process(&mut self) {
-        let ref mut cache = self.cache.get_mut(&self.query.get()).unwrap();
+        let algorithm = ALGORITHMS[self.algorithm_index];
+        let ref mut cache = self.cache.get_mut(&(self.query.get(), algorithm)).unwrap();
 
         let query = Arc::new(self.query.clone());
         let (tx, rx) = channel();
@@ -187,7 +189,8 @@ impl<'a> Matcher {
     }
 
     pub fn process_interactive(&mut self) {
-        let ref mut cache = self.cache.get_mut(&self.query.get()).unwrap();
+        let algorithm = ALGORITHMS[self.algorithm_index];
+        let ref mut cache = self.cache.get_mut(&(self.query.get(), algorithm)).unwrap();
         let mut matched_items = cache.matched_items.write().unwrap();
         let items_len = self.items.read().unwrap().len();
         let timer = Instant::now();
@@ -219,12 +222,13 @@ impl<'a> Matcher {
     }
 
     fn reset_query(&mut self, query: &str) {
+        let algorithm = ALGORITHMS[self.algorithm_index];
         self.query = Query::new(query);
         if self.is_interactive {
             self.new_items.write().unwrap().clear();
-            self.cache.remove(&query.to_string());
+            self.cache.remove(&(query.to_string(), algorithm));
         }
-        self.cache.entry(query.to_string()).or_insert(MatcherCache::new());
+        self.cache.entry((query.to_string(), algorithm)).or_insert(MatcherCache::new());
     }
 
     pub fn run(&mut self) {
@@ -240,8 +244,10 @@ impl<'a> Matcher {
                         }
                     }
                     Event::EvMatcherRotateAlgorithm => {
+                        let query = self.query.get();
                         self.algorithm_index = (self.algorithm_index + 1) % ALGORITHMS.len();
                         self.eb_notify.set(Event::EvModelUpdateAlgorithm, Box::new(ALGORITHM_NAMES[self.algorithm_index].to_string()));
+                        self.reset_query(&query);
                     }
                     _ => {}
                 }
@@ -263,7 +269,8 @@ impl<'a> Matcher {
             }
 
             if !self.eb_req.peek(Event::EvMatcherResetQuery) {
-                let matched_items = self.cache.get_mut(&self.query.get()).unwrap().matched_items.clone();
+                let algorithm = ALGORITHMS[self.algorithm_index];
+                let matched_items = self.cache.get_mut(&(self.query.get(), algorithm)).unwrap().matched_items.clone();
                 if self.is_interactive {
                     self.eb_notify.set_debounce(Event::EvMatcherEnd, Box::new(matched_items), RESULT_UPDATE_DURATION);
                 } else {
