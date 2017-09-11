@@ -261,8 +261,6 @@ impl Model {
 
     fn update_size(&mut self, curses: &mut Curses) {
         // update the (height, width)
-        curses.endwin();
-        curses.refresh();
         curses.resize();
         let (h, w) = curses.get_maxyx();
         self.height = h-2;
@@ -569,6 +567,7 @@ impl Model {
     }
 
     pub fn act_redarw(&mut self, curses: &mut Curses, print_query_func: ClosureType) {
+        debug!("model:act_redarw");
         self.update_size(curses);
         curses.erase();
         self.draw_items(curses);

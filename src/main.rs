@@ -7,7 +7,11 @@ extern crate regex;
 extern crate shlex;
 extern crate utf8parse;
 extern crate unicode_width;
+#[macro_use] extern crate log;
+extern crate env_logger;
 #[macro_use] extern crate lazy_static;
+extern crate time;
+
 mod item;
 mod reader;
 mod input;
@@ -32,6 +36,8 @@ use std::mem;
 use std::ptr;
 use libc::{sigemptyset, sigaddset, sigwait, pthread_sigmask};
 use curses::Curses;
+use log::{LogRecord, LogLevelFilter};
+use env_logger::LogBuilder;
 
 macro_rules! println_stderr(
     ($($arg:tt)*) => { {
@@ -87,6 +93,25 @@ Usage: sk [options]
 ";
 
 fn main() {
+
+    let format = |record: &LogRecord| {
+        let t = time::now();
+        format!("{},{:03} - {} - {}",
+                time::strftime("%Y-%m-%d %H:%M:%S", &t).unwrap(),
+                t.tm_nsec / 1000_000,
+                record.level(),
+                record.args()
+               )
+    };
+
+    let mut builder = LogBuilder::new();
+    builder.format(format).filter(None, LogLevelFilter::Info);
+
+    if env::var("RUST_LOG").is_ok() {
+        builder.parse(&env::var("RUST_LOG").unwrap());
+    }
+
+    builder.init().unwrap();
     let exit_code = real_main();
     std::process::exit(exit_code);
 }
@@ -121,6 +146,7 @@ fn real_main() -> i32 {
     opts.optopt("I", "", "replace `replstr` with the selected item", "replstr");
     opts.optopt("", "color", "change color theme", "[BASE][,COLOR:ANSI]");
     opts.optopt("", "margin", "margin around the finder", "");
+    opts.optopt("", "height", "height of the window", "");
     opts.optflag("", "reverse", "reverse orientation");
     opts.optflag("", "version", "print out the current version of skim");
 
@@ -172,8 +198,7 @@ fn real_main() -> i32 {
         }
     });
 
-    let mut curses = Curses::new();
-    curses.parse_options(&options);
+    let mut curses = Curses::new(&options);
 
     //------------------------------------------------------------------------------
     // input

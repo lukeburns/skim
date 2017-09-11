@@ -6,6 +6,8 @@ use getopts;
 use std::sync::RwLock;
 use std::collections::HashMap;
 use libc::{STDIN_FILENO, STDERR_FILENO, fdopen, c_char};
+use std::io::{stdout, stdin, Read, Write};
+use std::cmp::min;
 
 //use std::io::Write;
 macro_rules! println_stderr(
@@ -107,12 +109,68 @@ pub enum Margin {
     Percent(i32),
 }
 
+// A curse object is an abstraction of the screen to be draw on
+// |
+// |
+// |
+// +------------+ start_line
+// |  ^         |
+// | <          | <-- top = start_line + margin_top
+// |  (margins) |
+// |           >| <-- bottom = end_line - margin_bottom
+// |          v |
+// +------------+ end_line
+// |
+// |
+
+struct Screen(SCREEN);
+
+impl Screen {
+    pub fn getyx(&self) -> (i32, i32) {
+        let mut y = 0;
+        let mut x = 0;
+        getyx(self.0, &mut y, &mut x);
+        (y, x)
+    }
+
+    pub fn getmaxyx(&self) -> (i32, i32) {
+        let mut max_y = 0;
+        let mut max_x = 0;
+        getmaxyx(self.0, &mut max_y, &mut max_x);
+        (max_y, max_x)
+    }
+
+    pub fn clrtoeol(&self) {
+        clrtoeol();
+    }
+
+    pub fn endwin(&self) {
+        endwin();
+    }
+
+    pub fn refresh(&self) {
+        refresh();
+    }
+
+    pub fn mv(&self, y: i32, x: i32) {
+        mv(y, x);
+    }
+}
+
+impl Drop for Screen {
+    fn drop(&mut self) {
+        //delscreen(self.0);
+    }
+}
+
 pub struct Curses {
-    screen: SCREEN,
+    screen: Screen,
     top: i32,
     bottom: i32,
     left: i32,
     right: i32,
+    height: Margin,
+    start_y: i32,
     margin_top: Margin,
     margin_bottom: Margin,
     margin_left: Margin,
@@ -122,31 +180,74 @@ pub struct Curses {
 unsafe impl Send for Curses {}
 
 impl Curses {
-    pub fn new() -> Self {
+    pub fn new(options: &getopts::Matches) -> Self {
         let local_conf = LcCategory::all;
         setlocale(local_conf, "en_US.UTF-8"); // for showing wide characters
-        let stdin = unsafe { fdopen(STDIN_FILENO, "r".as_ptr() as *const c_char)};
-        let stderr = unsafe { fdopen(STDERR_FILENO, "w".as_ptr() as *const c_char)};
-        let screen = newterm(None, stderr, stdin);
-        set_term(screen);
-        //let screen = initscr();
+
+
+        let margins = if let Some(margin_option) = options.opt_str("margin") {
+            Curses::parse_margin(&margin_option)
+        } else {
+            (Margin::Fixed(0), Margin::Fixed(0), Margin::Fixed(0), Margin::Fixed(0))
+        };
+        let (margin_top, margin_right, margin_bottom, margin_left) = margins;
+
+        let height = if let Some(height_option) = options.opt_str("height") {
+            Curses::parse_margin_string(&height_option)
+        } else {
+            Margin::Percent(100)
+        };
+
+        //let stdin = unsafe { fdopen(STDIN_FILENO, "r".as_ptr() as *const c_char)};
+        //let stderr = unsafe { fdopen(STDERR_FILENO, "w".as_ptr() as *const c_char)};
+        //let screen = newterm(None, stderr, stdin);
+        //set_term(screen);
+
+        let s = initscr();
+        refresh();
         raw();
         noecho();
 
-        Curses {
+        let screen = Screen(s);
+
+        match height {
+            Margin::Percent(100) => {}
+            _ => {
+                putp(&tigetstr("rmcup"));
+                refresh();
+            }
+        };
+
+        let (y, x) = Curses::get_cursor_pos();
+        let (max_y, max_x) = screen.getmaxyx();
+        Curses::reserve_lines(&screen, max_y, height);
+
+        let start_y = match height {
+            Margin::Percent(100) => 0,
+            Margin::Percent(p) => min(y, max_y- p*max_y/100),
+            Margin::Fixed(rows) => min(y, max_y - rows),
+        };
+
+        debug!("curses: height = {:?}, y/x: {}/{}, max: {}/{}, start_y: {}", height, y, x, max_y, max_x, start_y);
+
+        let mut curses = Curses {
             screen: screen,
             top: 0,
             bottom: 0,
             left: 0,
             right: 0,
-            margin_top: Margin::Fixed(0),
-            margin_bottom: Margin::Fixed(0),
-            margin_left: Margin::Fixed(0),
-            margin_right: Margin::Fixed(0),
-        }
+            height,
+            start_y,
+            margin_top,
+            margin_bottom,
+            margin_left,
+            margin_right,
+        };
+        curses.resize();
+        curses
     }
 
-    fn parse_margin(&self, margin: &str) -> Margin {
+    fn parse_margin_string(margin: &str) -> Margin {
         if margin.ends_with("%") {
             Margin::Percent(margin[0..margin.len()-1].parse::<i32>().unwrap_or(100))
         } else {
@@ -154,46 +255,33 @@ impl Curses {
         }
     }
 
-    pub fn parse_options(&mut self, options: &getopts::Matches) {
-        if let Some(margin_option) = options.opt_str("margin") {
-            let margins = margin_option
-                .split(",")
-                .collect::<Vec<&str>>();
+    fn parse_margin(margin : &str) -> (Margin, Margin, Margin, Margin) {
+        let margins = margin.split(",").collect::<Vec<&str>>();
 
-            match margins.len() {
-                1 => {
-                    let margin = self.parse_margin(margins[0]);
-                    self.margin_top = margin;
-                    self.margin_bottom = margin;
-                    self.margin_left = margin;
-                    self.margin_right = margin;
-                }
-                2 => {
-                    let margin_tb = self.parse_margin(margins[0]);
-                    self.margin_top = margin_tb;
-                    self.margin_bottom = margin_tb;
-
-                    let margin_rl = self.parse_margin(margins[1]);
-                    self.margin_left = margin_rl;
-                    self.margin_right = margin_rl;
-                }
-                3 => {
-                    self.margin_top = self.parse_margin(margins[0]);
-                    let margin_rl = self.parse_margin(margins[1]);
-                    self.margin_left = margin_rl;
-                    self.margin_right = margin_rl;
-                    self.margin_bottom = self.parse_margin(margins[2]);
-                }
-                4 => {
-                    self.margin_top = self.parse_margin(margins[0]);
-                    self.margin_right = self.parse_margin(margins[1]);
-                    self.margin_bottom = self.parse_margin(margins[2]);
-                    self.margin_left = self.parse_margin(margins[3]);
-                }
-                _ => { }
+        match margins.len() {
+            1 => {
+                let margin = Curses::parse_margin_string(margins[0]);
+                (margin, margin, margin, margin)
             }
-
-            self.resize();
+            2 => {
+                let margin_tb = Curses::parse_margin_string(margins[0]);
+                let margin_rl = Curses::parse_margin_string(margins[1]);
+                (margin_tb, margin_rl, margin_tb, margin_rl)
+            }
+            3 => {
+                let margin_top = Curses::parse_margin_string(margins[0]);
+                let margin_rl = Curses::parse_margin_string(margins[1]);
+                let margin_bottom = Curses::parse_margin_string(margins[2]);
+                (margin_top, margin_rl, margin_bottom, margin_rl)
+            }
+            4 => {
+                let margin_top = Curses::parse_margin_string(margins[0]);
+                let margin_right = Curses::parse_margin_string(margins[1]);
+                let margin_bottom = Curses::parse_margin_string(margins[2]);
+                let margin_left = Curses::parse_margin_string(margins[3]);
+                (margin_top, margin_right, margin_bottom, margin_left)
+            }
+            _ => (Margin::Fixed(0), Margin::Fixed(0), Margin::Fixed(0), Margin::Fixed(0))
         }
     }
 
@@ -205,19 +293,56 @@ impl Curses {
         }
     }
 
-    pub fn resize(&mut self) {
-        let mut max_y = 0;
-        let mut max_x = 0;
-        getmaxyx(stdscr(), &mut max_y, &mut max_x);
+    fn get_cursor_pos() -> (i32, i32) {
+        let mut stdout = stdout();
+        let mut f = stdin();
+        putp("\x1B[6n");
+        refresh();
 
-        self.top = match self.margin_top {
-            Margin::Fixed(num) => num,
-            Margin::Percent(per) => per * max_y / 100,
+        let mut read_chars = Vec::new();
+        loop {
+            let mut buf = [0; 1];
+            let _ = f.read(&mut buf);
+            read_chars.push(buf[0]);
+            if buf[0] == b'R' {
+                break;
+            }
+        }
+        let s = String::from_utf8(read_chars).unwrap();
+        let t: Vec<&str> = s[2..s.len()-1].split(';').collect();
+        (t[0].parse::<i32>().unwrap() - 1, t[1].parse::<i32>().unwrap() - 1)
+    }
+
+    fn reserve_lines(screen: &Screen, max_y: i32, height: Margin) {
+        let rows = match height {
+            Margin::Percent(100) => {return;}
+            Margin::Percent(percent) => max_y*percent/100,
+            Margin::Fixed(rows) => rows,
         };
 
-        self.bottom = match self.margin_bottom {
+        debug!("curses:reserve_lines: max_y {}, rows: {}", max_y, rows);
+
+        for i in 0..(rows-1) {
+            mv(i, 0);
+            printw(" "); // something other than space is necessary for "exit_ca_mode"
+        }
+        printw(">"); // something other than space is necessary for "exit_ca_mode"
+        refresh();
+    }
+
+    pub fn resize(&mut self) {
+        let (_, max_x) = self.screen.getmaxyx();
+
+        let height = self.height_in_rows();
+
+        self.top = self.start_y + match self.margin_top {
             Margin::Fixed(num) => num,
-            Margin::Percent(per) => per * max_y / 100,
+            Margin::Percent(per) => per * height / 100,
+        };
+
+        self.bottom = self.start_y + height - match self.margin_bottom {
+            Margin::Fixed(num) => num,
+            Margin::Percent(per) => per * height / 100,
         };
 
         self.left = match self.margin_left {
@@ -225,43 +350,63 @@ impl Curses {
             Margin::Percent(per) => per * max_x / 100,
         };
 
-        self.right = match self.margin_right {
+        self.right = max_x - match self.margin_right {
             Margin::Fixed(num) => num,
             Margin::Percent(per) => per * max_x / 100,
         };
+
+        debug!("curses:resize: after, trbl: {}, {}, {}, {}", self.top, self.right, self.bottom, self.left);
+    }
+
+    fn height_in_rows(&self) -> i32 {
+        let (max_y, _) = self.screen.getmaxyx();
+        match self.height {
+            Margin::Percent(100) => max_y,
+            Margin::Percent(p) => min(max_y, p*max_y/100),
+            Margin::Fixed(rows) => min(max_y, rows),
+        }
     }
 
     pub fn mv(&self, y: i32, x: i32) {
-        mv(y+self.top, x+self.left);
+        self.screen.mv(y+self.top, x+self.left);
+        let (yy, xx) = self.screen.getyx();
+        debug!("curses:mv({}, {}); after: {}, {}, {}/{}", y, x, y + self.top, x + self.left, yy, xx);
     }
 
     pub fn get_maxyx(&self) -> (i32, i32) {
-        let mut max_y = 0;
-        let mut max_x = 0;
-        getmaxyx(stdscr(), &mut max_y, &mut max_x);
-        (max_y-self.top-self.bottom, max_x-self.left-self.right)
+        let (a, b) = (self.bottom-self.top, self.right-self.left);
+        debug!("get_maxyx: {}/{}, trbl: {}, {}, {}, {}", a, b, self.top, self.right, self.bottom, self.left);
+        (a, b)
     }
 
     pub fn getyx(&self) -> (i32, i32) {
-        let mut y = 0;
-        let mut x = 0;
-        getyx(stdscr(), &mut y, &mut x);
+        let (y, x) = self.screen.getyx();
         (y-self.top, x-self.left)
     }
 
     pub fn clrtoeol(&self) {
-        clrtoeol();
-    }
-
-    pub fn endwin(&self) {
-        endwin();
+        debug!("curses:clrtoeol();");
+        //self.screen.clrtoeol();
+        let spaces = " ".repeat((self.right - self.bottom) as usize);
+        let (y, x) = self.screen.getyx();
+        self.screen.mv(y, 0);
+        printw(&spaces);
+        self.screen.mv(y, x);
     }
 
     pub fn erase(&self) {
-        erase();
+        debug!("curses:erase(); top: {}, bottom:{}", self.top, self.bottom);
+        //self.screen.erase();
+        let spaces = " ".repeat((self.right - self.bottom) as usize);
+        for i in self.top..self.bottom {
+            self.screen.mv(i, 0);
+            printw(&spaces);
+            //self.screen.clrtoeol();
+        }
     }
 
     pub fn cprint(&self, text: &str, pair: i16, is_bold: bool) {
+        debug!("curses:addstr({:?});", text);
         let attr = self.get_color(pair, is_bold);
         attron(attr);
         addstr(text);
@@ -269,6 +414,7 @@ impl Curses {
     }
 
     pub fn caddch(&self, ch: char, pair: i16, is_bold: bool) {
+        debug!("curses:addstr(&{:?}.to_string());", ch);
         let attr = self.get_color(pair, is_bold);
         attron(attr);
         addstr(&ch.to_string()); // to support wide character
@@ -276,12 +422,21 @@ impl Curses {
     }
 
     pub fn printw(&self, text: &str) {
+        debug!("curses:printw({:?});", text);
         printw(text);
     }
 
     pub fn close(&self) {
+        debug!("curses:close();");
+        self.erase();
+        self.mv(0, 0);
+        self.screen.refresh();
+        if self.height != Margin::Percent(100) {
+            putp(&tigetstr("smcup"));
+            refresh();
+        }
         endwin();
-        delscreen(self.screen);
+        delscreen(self.screen.0);
     }
 
     pub fn attr_on(&self, attr: attr_t) {
@@ -293,7 +448,8 @@ impl Curses {
     }
 
     pub fn refresh(&self) {
-        refresh();
+        debug!("curses:refresh();");
+        self.screen.refresh();
     }
 }
 
