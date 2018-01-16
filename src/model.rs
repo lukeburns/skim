@@ -248,6 +248,16 @@ impl Model {
 
                         let _ = tx_ack.send(self.selected.len());
                     }
+                    Event::EvActReplaceLine => {
+                        let tx_ack: Sender<String> = *arg.downcast().unwrap();
+                        if !self.items.is_empty() {
+                            let current_item = self.items.get(self.item_cursor + self.line_cursor).unwrap();
+                            let current_item_text = current_item.item.get_output_text();
+                            let _ = tx_ack.send(current_item_text.to_string());
+                        } else {
+                            let _ = tx_ack.send(String::new());
+                        }
+                    }
                     Event::EvActAbort => {
                         let tx_ack: Sender<bool> = *arg.downcast().unwrap();
                         curses.close();

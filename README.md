@@ -223,6 +223,7 @@ Specify the bindings with comma seperated pairs(no space allowed), example:
 | page-down            | page-down                   |
 | page-up              | page-up                     |
 | rotate-mode          | ctrl-r                      |
+| replace-line         | None                        |
 | scroll-left          | alt-h                       |
 | scroll-right         | alt-l                       |
 | select-all           | None                        |

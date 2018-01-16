@@ -441,6 +441,19 @@ fn real_main() -> i32 {
                 on_query_change(&query);
             }
 
+            EvActReplaceLine => {
+                let (tx, rx): (Sender<String>, Receiver<String>) = channel();
+                let _ = tx_model.send((EvActReplaceLine, Box::new(tx)));
+                let output = rx.recv().unwrap();
+
+                query.act_line_discard();
+                for ch in output.chars() {
+                    query.act_add_char(ch);
+                }
+
+                on_query_change(&query);
+            }
+
             EvActUnixLineDiscard => {
                 query.act_line_discard();
                 on_query_change(&query);
