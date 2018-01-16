@@ -100,6 +100,7 @@ Usage: sk [options]
     --print0             Print output delimited by ASCII NUL(\\0) characters
     --print-query        Print query as the first line
     --print-cmd          Print command query as the first line (after --print-query)
+    --ignore-selection   Don't print selection
 
   Environment variables
     SKIM_DEFAULT_COMMAND Default command to use when input is tty
@@ -220,6 +221,7 @@ fn real_main() -> i32 {
         .arg(Arg::with_name("history-size").long("history-size").takes_value(true).default_value("500"))
         .arg(Arg::with_name("print-query").long("print-query"))
         .arg(Arg::with_name("print-cmd").long("print-cmd"))
+        .arg(Arg::with_name("ignore-selection").long("ignore-selection"))
         .arg(Arg::with_name("read0").long("read0"))
         .arg(Arg::with_name("print0").long("print0"))
         .arg(Arg::with_name("sync").long("sync"))

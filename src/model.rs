@@ -59,6 +59,7 @@ pub struct Model {
     output_ending: &'static str,
     print_query: bool,
     print_cmd: bool,
+    ignore_selection: bool,
     no_hscroll: bool,
 }
 
@@ -93,6 +94,7 @@ impl Model {
             output_ending: "\n",
             print_query: false,
             print_cmd: false,
+            ignore_selection: false,
             no_hscroll: false,
         }
     }
@@ -133,6 +135,10 @@ impl Model {
 
         if options.is_present("print-cmd") {
             self.print_cmd = true;
+        }
+        
+        if options.is_present("ignore-selection") {
+            self.ignore_selection = true;
         }
 
         if options.is_present("no-hscroll") {
@@ -240,13 +246,15 @@ impl Model {
                             print!("{}{}", cmd, self.output_ending);
                         }
 
-                        accept_key.map(|key| {
-                            print!("{}{}", key, self.output_ending);
-                        });
-
-                        self.act_output();
-
-                        let _ = tx_ack.send(self.selected.len());
+                        if !self.ignore_selection {
+                            accept_key.map(|key| {
+                                print!("{}{}", key, self.output_ending);
+                            });
+                            
+                            self.act_output();
+                            
+                            let _ = tx_ack.send(self.selected.len());
+                        }
                     }
                     Event::EvActReplaceLine => {
                         let tx_ack: Sender<String> = *arg.downcast().unwrap();
